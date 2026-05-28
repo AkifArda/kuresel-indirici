@@ -92,76 +92,49 @@ HTML_TEMPLATE = """
         status.style.color = "#34d399";
         status.innerText = "⏳ Medya formatı hazırlanıyor, lütfen bekleyin...";
 
-        // --- MP3 MODU: ÇALIŞAN SES API'Sİ ---
+        // Dinamik API host ve URL ayarı (Aynı yapıda çalışan ikiz motorlar)
+        let apiUrl = "";
+        let apiHost = "";
+
         if (mode === 'mp3') {
-            const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
-            
-            fetch(apiUrl, {
-                method: "GET",
-                headers: {
-                    "x-rapidapi-key": RAPIDAPI_KEY,
-                    "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
-                }
-            })
-            .then(response => {
-                if (!response.ok) throw new Error("RapidAPI MP3 hatası: " + response.status);
-                return response.json();
-            })
-            .then(data => {
-                if (data && data.status === "processing") {
-                    status.innerText = "⏳ Ses dosyası dönüştürülüyor, 3 saniye içinde otomatik tekrar denenecek...";
-                    setTimeout(processDownload, 3000);
-                    return;
-                }
-                if (data && data.status === "ok" && data.link) {
-                    triggerDownload(data.link, status, btn);
-                } else {
-                    throw new Error(data.msg || "MP3 indirme bağlantısı alınamadı.");
-                }
-            })
-            .catch(err => showHata(err.message, status, btn));
-        } 
-        
-        // --- MP4 MODU: ENGELLENMEYEN RESMİ VİDEO API'Sİ ---
-        else {
-            // Doğrudan tarayıcıdan çalışan ve video linkini hazırlayan kararlı RapidAPI video motoru
-            const apiUrl = `https://youtube-video-download-hd.p.rapidapi.com/getVideoInfo?url=https://www.youtube.com/watch?v=${videoId}`;
-            
-            fetch(apiUrl, {
-                method: "GET",
-                headers: {
-                    "x-rapidapi-key": RAPIDAPI_KEY,
-                    "x-rapidapi-host": "youtube-video-download-hd.p.rapidapi.com"
-                }
-            })
-            .then(response => {
-                if (!response.ok) throw new Error("RapidAPI MP4 hatası: " + response.status);
-                return response.json();
-            })
-            .then(data => {
-                // Gelen veriden video + ses bir arada olan (mp4) indirme linklerini süzüyoruz
-                if (data && data.status && data.videos && data.videos.items) {
-                    const formats = data.videos.items;
-                    // Kalın/HD olan veya ses içeren ilk stabil MP4 formatını arıyoruz
-                    let downloadUrl = "";
-                    for (let i = 0; i < formats.length; i++) {
-                        if (formats[i].extension === "mp4" && formats[i].url) {
-                            downloadUrl = formats[i].url;
-                            break;
-                        }
-                    }
-                    
-                    if (downloadUrl) {
-                        triggerDownload(downloadUrl, status, btn);
-                    } else {
-                        throw new Error("Uygun MP4 formatında indirme linki bulunamadı.");
-                    }
-                } else {
-                    throw new Error("API video bilgilerini çözemedi veya video gizli/kısıtlı.");
-                }
-            })
-            .catch(err => showHata(err.message, status, btn));
+            apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+            apiHost = "youtube-mp36.p.rapidapi.com";
+        } else {
+            apiUrl = `https://youtube-mp46.p.rapidapi.com/dl?id=${videoId}`;
+            apiHost = "youtube-mp46.p.rapidapi.com";
         }
+        
+        fetch(apiUrl, {
+            method: "GET",
+            headers: {
+                "x-rapidapi-key": RAPIDAPI_KEY,
+                "x-rapidapi-host": apiHost
+            }
+        })
+        .then(response => {
+            if (!response.ok) throw new Error("RapidAPI bağlantı hatası: " + response.status);
+            return response.json();
+        })
+        .then(data => {
+            // Dosya sunucuda ilk kez dönüştürülüyorsa otomatik bekleme döngüsü
+            if (data && data.status === "processing") {
+                status.innerText = "⏳ Medya dosyası sunucuda dönüştürülüyor, 3 saniye içinde otomatik tekrar denenecek...";
+                setTimeout(processDownload, 3000);
+                return;
+            }
+            
+            // İndirme linki başarıyla geldiyse indirmeyi tetikle
+            if (data && data.status === "ok" && data.link) {
+                triggerDownload(data.link, status, btn);
+            } else {
+                throw new Error(data.msg || "İndirme bağlantısı oluşturulamadı.");
+            }
+        })
+        .catch(err => {
+            status.style.color = "#ef4444";
+            status.innerText = "Hata Detayı: " + err.message;
+            btn.disabled = false;
+        });
     }
 
     function triggerDownload(downloadUrl, status, btn) {
@@ -169,12 +142,6 @@ HTML_TEMPLATE = """
         status.innerText = "✅ İşlem tamam! İndirme tarayıcınızda başlatıldı.";
         btn.disabled = false;
         window.location.href = downloadUrl;
-    }
-
-    function showHata(message, status, btn) {
-        status.style.color = "#ef4444";
-        status.innerText = "Hata Detayı: " + message;
-        btn.disabled = false;
     }
 </script>
 </body>
