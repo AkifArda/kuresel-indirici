@@ -5,6 +5,9 @@ from flask import Flask, render_template_string, request, jsonify, Response
 
 app = Flask(__name__)
 
+# RapidAPI'den aldığın güncel anahtarını buraya sabitledim kanka:
+RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6"
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -77,7 +80,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya sunucuda işleniyor, lütfen bekleyin...";
+        status.innerText = "⏳ Medya işleniyor, lütfen sayfayı kapatmayın...";
 
         fetch('/process', {
             method: 'POST',
@@ -102,7 +105,7 @@ HTML_TEMPLATE = """
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya işlenirken sunucu hatası oluştu. Lütfen tekrar deneyin.";
+            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen az sonra tekrar deneyin.";
             btn.disabled = false;
         });
     }
@@ -126,9 +129,6 @@ def process():
     url = data.get('url')
     mode = data.get('mode')
     
-    if not url:
-        return jsonify({"success": False, "error": "Link bos olamaz"}), 400
-
     video_id = get_youtube_id(url)
     if not video_id:
         return jsonify({"success": False, "error": "Geçersiz YouTube linki"}), 400
@@ -145,54 +145,54 @@ def stream_file():
     
     file_url = None
 
-    # ---- GÜÇLÜ VE KESİNTİSİZ YOUTUBE İNDİRME ENGINE ALTYAPISI ----
-    # Doğrudan indirme akışı sağlayan en popüler global API tünellerinden biri
-    try:
-        api_headers = {
-            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
-            "User-Agent": "Mozilla/5.0"
+    if mode == 'mp3':
+        # ---- MP3 İÇİN SENİN RAPIDAPI MOTORUN (YOUTUBE MP3) ----
+        url = "https://youtube-mp36.p.rapidapi.com/dl"
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
-        # Kararlı ve hızlı indirme linki üreten ortak havuz yapısı
-        res = requests.get(f"https://co.wuk.sh/api/json", json={
-            "url": f"https://www.youtube.com/watch?v={video_id}",
-            "isAudioOnly": True if mode == 'mp3' else False
-        }, headers={"Accept": "application/json"}, timeout=8)
-        
-        if res.status_code == 200:
-            file_url = res.json().get("url")
-    except:
-        pass
-
-    # ---- YEDEK KAPISI (Y2MATE TUNNEL) ----
-    if not file_url:
         try:
-            # Doğrudan mp3/mp4 indirme linki veren temiz servis
-            alt_res = requests.get(f"https://api.devesed.com/yt/{video_id}", timeout=8)
-            if alt_res.status_code == 200:
-                res_data = alt_res.json()
-                file_url = res_data.get('mp3') if mode == 'mp3' else res_data.get('mp4')
+            res = requests.get(url, headers=headers, params={"id": video_id}, timeout=12)
+            if res.status_code == 200:
+                file_url = res.json().get("link")
+        except Exception as e:
+            print(f"MP3 API Hatasi: {e}", flush=True)
+    else:
+        # ---- MP4 (VIDEO) İÇİN ÇOKLU ALTYAPI GEÇİŞ SİSTEMİ ----
+        # 1. Havuz: Cobalt Engine Tüneli
+        try:
+            video_res = requests.post("https://api.cobalt.tools/api/json", json={
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "isAudioOnly": False,
+                "vQuality": "720"
+            }, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"}, timeout=10)
+            if video_res.status_code == 200:
+                file_url = video_res.json().get("url")
         except:
             pass
 
-    # KESİN GÜVENLİK DUVARI: Eğer dosya linki bulunamadıysa asla HTML indirme, hata sayfasına döndür
-    if not file_url or "savefrom" in file_url or not file_url.startswith("http"):
-        return "Medya sunucusu şu an yanıt vermiyor. Lütfen daha sonra tekrar deneyiniz.", 503
+        # 2. Havuz (Yedek): Devesed Video Tüneli
+        if not file_url:
+            try:
+                alt_res = requests.get(f"https://api.devesed.com/yt/{video_id}", timeout=10)
+                if alt_res.status_code == 200:
+                    file_url = alt_res.json().get('mp4')
+            except:
+                pass
 
-    # Çekilen gerçek medya dosyasını kendi sunucumuz üzerinden akış (stream) olarak aktarma
+    if not file_url or not file_url.startswith("http"):
+        return "Medya sunucusu şu an yanıt vermiyor veya API limiti tükendi. Lütfen birazdan tekrar deneyin.", 503
+
+    # Gerçek medyayı (mp3/mp4) Render sunucusu üzerinden gizli akış (stream) olarak aktarıyoruz
     try:
-        file_res = requests.get(file_url, stream=True, timeout=30)
-        
-        # İçeriğin HTML olmadığından kesin emin oluyoruz
-        content_type = file_res.headers.get("Content-Type", "").lower()
-        if "text/html" in content_type or "application/xhtml+xml" in content_type:
-            return "Sunucu geçici olarak meşgul, lütfen birazdan tekrar indirmeyi deneyin.", 503
-            
+        file_res = requests.get(file_url, stream=True, timeout=45)
         ext = "mp3" if mode == 'mp3' else "mp4"
         filename = f"media_{video_id}.{ext}"
         
-        headers = {
+        response_headers = {
             "Content-Disposition": f"attachment; filename={filename}",
-            "Content-Type": file_res.headers.get("Content-Type", "application/octet-stream")
+            "Content-Type": "audio/mpeg" if mode == 'mp3' else "video/mp4"
         }
         
         def generate():
@@ -200,9 +200,9 @@ def stream_file():
                 if chunk:
                     yield chunk
                     
-        return Response(generate(), headers=headers)
+        return Response(generate(), headers=response_headers)
     except:
-        return "Medya aktarım tünelinde hata oluştu.", 500
+        return "Medya aktarılırken bir senkronizasyon hatası oluştu.", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
