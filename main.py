@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string, redirect
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
@@ -17,64 +17,72 @@ HTML_TEMPLATE = """
         input, select, button { width: 100%; padding: 15px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #374151; background: #05070c; color: white; }
         button { background: var(--accent); color: black; font-weight: bold; border: none; cursor: pointer; }
         #progress-container { display: none; margin-top: 20px; }
-        #progress-bar { width: 0%; height: 8px; background: var(--accent); border-radius: 4px; transition: width 0.4s; }
+        #progress-bar { width: 0%; height: 8px; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+        #download-ready { display: none; background: #3b82f6; }
     </style>
 </head>
 <body>
 <div class="card">
     <h2 style="text-align:center; color:var(--accent)">🚀 Pro Medya İndirici</h2>
     <input type="text" id="url" placeholder="YouTube Linki...">
-    <select id="quality">
-        <option value="1080">1080p (Full HD)</option>
-        <option value="720">720p (HD)</option>
-    </select>
-    <button id="btn" onclick="startDownload()">İndirmeyi Başlat</button>
+    <select id="format"><option value="mp3">MP3 (Ses)</option><option value="mp4">MP4 (Video)</option></select>
+    <select id="quality"><option value="1080">1080p</option><option value="720">720p</option></select>
+    
+    <button id="btn" onclick="startProcess()">Medya Hazırla</button>
+    <button id="download-ready" onclick="downloadFile()">✅ Dosya Hazır! İndir</button>
+
     <div id="progress-container">
         <div id="progress-bar"></div>
-        <p id="status" style="text-align:center; font-size:12px; margin-top:5px;">Hazırlanıyor...</p>
+        <p id="status" style="text-align:center; font-size:12px; margin-top:5px;"></p>
     </div>
 </div>
 
 <script>
-    async function startDownload() {
+    let finalUrl = "";
+
+    async function startProcess() {
         const url = document.getElementById('url').value;
+        const format = document.getElementById('format').value;
         const quality = document.getElementById('quality').value;
+        const btn = document.getElementById('btn');
         const progress = document.getElementById('progress-container');
         const bar = document.getElementById('progress-bar');
         const status = document.getElementById('status');
-        const btn = document.getElementById('btn');
+        const dlBtn = document.getElementById('download-ready');
 
         if(!url) return alert("Link gir!");
         
-        progress.style.display = 'block';
         btn.disabled = true;
-        
-        // Simüle İlerleme
-        let width = 0;
-        let interval = setInterval(() => {
-            if (width >= 90) clearInterval(interval);
-            else { width += 5; bar.style.width = width + '%'; status.innerText = width + '% Yükleniyor...'; }
-        }, 300);
+        progress.style.display = 'block';
+        bar.style.width = '30%';
+        status.innerText = "Sunucuya bağlanılıyor...";
 
-        // Cobalt API Çağrısı
         const res = await fetch("https://api.cobalt.tools/api/json", {
             method: "POST",
             headers: { "Accept": "application/json", "Content-Type": "application/json" },
-            body: JSON.stringify({ url: url, vQuality: quality, filenamePattern: "classic" })
+            body: JSON.stringify({ 
+                url: url, 
+                vQuality: quality, 
+                isAudioOnly: (format === 'mp3'),
+                filenamePattern: "classic" 
+            })
         });
         
         const data = await res.json();
-        clearInterval(interval);
         
         if (data.url) {
             bar.style.width = '100%';
-            status.innerText = "✅ Tamamlandı! İndirme başlıyor...";
-            window.location.href = data.url;
+            status.innerText = "İşlem Tamamlandı!";
+            finalUrl = data.url;
+            dlBtn.style.display = 'block';
+            btn.style.display = 'none';
         } else {
-            status.innerText = "❌ Hata: " + (data.text || "Video bulunamadı");
+            status.innerText = "❌ Hata: " + (data.text || "Bir şeyler ters gitti");
+            btn.disabled = false;
         }
-        btn.disabled = false;
     }
+
+    function downloadFile() { window.location.href = finalUrl; }
 </script>
 </body>
 </html>
