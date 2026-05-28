@@ -1,12 +1,9 @@
 import os
-import requests
 import re
 from flask import Flask, render_template_string, request, jsonify, Response
+import yt_dlp
 
 app = Flask(__name__)
-
-# RapidAPI'den aldığın güncel anahtarın kanka:
-RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -80,7 +77,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya sunucuda yüksek hızda işleniyor, lütfen bekleyin...";
+        status.innerText = "⏳ Medya sunucuda yerel olarak işleniyor ve indiriliyor. Lütfen bekleyin...";
 
         fetch('/process', {
             method: 'POST',
@@ -94,18 +91,14 @@ HTML_TEMPLATE = """
                 status.innerText = "✅ İşlem tamam! İndirme doğrudan sitenizden başlıyor.";
                 btn.disabled = false;
                 
-                const a = document.createElement('a');
-                a.href = data.download_route;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                window.location.href = data.download_route;
             } else {
                 throw new Error(data.error || "İndirme bağlantısı oluşturulamadı.");
             }
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen linki kontrol edip az sonra tekrar deneyin.";
+            status.innerText = "❌ Hata: Medya şu an indirilemedi. Linkin doğruluğundan emin olup tekrar deneyin.";
             btn.disabled = false;
         });
     }
@@ -135,77 +128,57 @@ def process():
 
     return jsonify({
         "success": True, 
-        "download_route": f"/stream_file?id={video_id}&mode={mode}"
+        "download_route": f"/download_file?url={url}&mode={mode}"
     })
 
-@app.route('/stream_file')
-def stream_file():
-    video_id = request.args.get('id')
+@app.route('/download_file')
+def download_file():
+    video_url = request.args.get('url')
     mode = request.args.get('mode')
     
-    file_url = None
-    full_url = f"https://www.youtube.com/watch?v={video_id}"
+    if not video_url:
+        return "Eksik parametre.", 400
 
-    # ---- YENİ ULTRA KARARLI RAPIDAPI MOTORU ----
-    # Hem MP3 hem de MP4 indirme linkini tek seferde doğrudan teslim eden ana yapı
-    url = "https://youtube-media-downloader.p.rapidapi.com/v2/video/details"
-    headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "youtube-media-downloader.p.rapidapi.com"
+    # Tamamen bağımsız yt-dlp ayarları (Harici API kullanmadan doğrudan video akış linkini yakalar)
+    ydl_opts = {
+        'format': 'bestaudio/best' if mode == 'mp3' else 'best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True
     }
-    
+
     try:
-        res = requests.get(url, headers=headers, params={"videosId": video_id}, timeout=12)
-        if res.status_code == 200:
-            res_json = res.json()
-            if mode == 'mp3':
-                # API'den gelen en yüksek kalitedeki ses (audio) akışını alıyoruz
-                audios = res_json.get("audios", {}).get("items", [])
-                if audios:
-                    file_url = audios[0].get("url")
-            else:
-                # API'den gelen doğrudan video akışını alıyoruz (720p veya en iyi uyumlu)
-                videos = res_json.get("videos", {}).get("items", [])
-                if videos:
-                    file_url = videos[0].get("url")
-    except Exception as e:
-        print(f"RapidAPI Hatasi: {e}", flush=True)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            # YouTube'un doğrudan medya akış linkini (googlevideo.com linkini) yakalıyoruz
+            stream_url = info.get('url')
+            video_title = info.get('title', 'media')
+            # Türkçe karakterleri temizleme ve güvenli dosya adı oluşturma
+            safe_title = "".join([c if c.isalnum() else "_" for c in video_title])
+            
+        if not stream_url:
+            return "YouTube medya akışı yakalanamadı.", 500
 
-    # ---- 2. YEDEK KAPISI (COBALT) ----
-    if not file_url:
-        try:
-            cobalt_res = requests.post("https://api.cobalt.tools/api/json", json={
-                "url": full_url,
-                "isAudioOnly": True if mode == 'mp3' else False,
-                "vQuality": "720"
-            }, headers={"Accept": "application/json"}, timeout=8)
-            if cobalt_res.status_code == 200:
-                file_url = cobalt_res.json().get("url")
-        except:
-            pass
-
-    if not file_url or not file_url.startswith("http"):
-        return "Medya sunucusu şu an yanıt vermiyor veya istek limiti aşıldı. Lütfen birazdan tekrar deneyiniz.", 503
-
-    # Medya dosyasını Render üzerinden gizli akış (stream) olarak kullanıcının tarayıcısına basıyoruz
-    try:
-        file_res = requests.get(file_url, stream=True, timeout=45)
-        ext = "mp3" if mode == 'mp3' else "mp4"
-        filename = f"media_{video_id}.{ext}"
+        # Yakalanan gerçek YouTube akışını Render üzerinden tünelleyerek kullanıcıya aktarıyoruz
+        import requests
+        media_res = requests.get(stream_url, stream=True, timeout=60)
         
+        ext = "mp3" if mode == 'mp3' else "mp4"
         response_headers = {
-            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Disposition": f"attachment; filename={safe_title}.{ext}",
             "Content-Type": "audio/mpeg" if mode == 'mp3' else "video/mp4"
         }
-        
+
         def generate():
-            for chunk in file_res.iter_content(chunk_size=8192):
+            for chunk in media_res.iter_content(chunk_size=16384):
                 if chunk:
                     yield chunk
-                    
+
         return Response(generate(), headers=response_headers)
-    except:
-        return "Medya tünelden akıtılırken senkronizasyon hatası oluştu.", 500
+
+    except Exception as e:
+        return f"Sistemsel Hata: Kendi motorumuz medyayı çekemedi. Detay: {e}", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
