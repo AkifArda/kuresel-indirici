@@ -81,7 +81,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya sunucuda işleniyor... (Bu işlem ilk başta 20-30 sn sürebilir)";
+        status.innerText = "⏳ Bulut sunucusu YouTube engelini aşıyor... (30 sn sürebilir)";
 
         fetch('/process', {
             method: 'POST',
@@ -133,18 +133,22 @@ def process():
 
     out_template = os.path.join(TMP_DIR, "file_%(id)s.%(ext)s")
     
-    # YouTube bot engelini (Sign in to confirm you're not a bot) aşmak için android istemci parametreleri ekliyoruz
+    # YouTube bot duvarını aşmak için iOS/Safari taklidi ve gelişmiş extractor parametreleri ekliyoruz
     base_args = [
         "yt-dlp",
-        "--extractor-args", "youtube:player-client=android,web",
+        "--extractor-args", "youtube:player-client=ios,web_safari",
+        "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+        "--add-header", "Accept-Language:tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "--no-check-certificates",
         "-o", out_template,
         url
     ]
     
+    # Komut dizilimini Flask'ın hata vermeyeceği şekilde birleştiriyoruz
     if mode == 'mp3':
-        cmd = base_args[:3] + ["-f", "ba", "-x", "--audio-format", "mp3"] + base_args[3:]
+        cmd = [base_args[0]] + base_args[1:5] + ["-f", "ba", "-x", "--audio-format", "mp3"] + base_args[5:]
     else:
-        cmd = base_args[:3] + ["-f", "mp4"] + base_args[3:]
+        cmd = [base_args[0]] + base_args[1:5] + ["-f", "mp4"] + base_args[5:]
         
     try:
         for f in glob.glob(os.path.join(TMP_DIR, "file_*")):
@@ -166,8 +170,8 @@ def process():
         else:
             lines = [line.strip() for line in result.stderr.split('\n') if line.strip()]
             clean_error = lines[-1] if lines else "Bilinmeyen hata"
-            if "bot" in clean_error.lower():
-                clean_error = "YouTube bot engeline takildi. Farkli bir cihaz istemcisi denenmeli."
+            if "sign in to confirm" in result.stderr.lower() or "bot" in result.stderr.lower():
+                clean_error = "YouTube bot duvarı hala aktif. Başka platform linki (Suno/SoundCloud vb.) deneyebilir veya kodu lokal pydroid'de çalıştırabilirsin."
             return jsonify({"error": f"yt-dlp hatasi: {clean_error}"}), 400
             
     except Exception as e:
