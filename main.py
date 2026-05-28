@@ -91,86 +91,83 @@ HTML_TEMPLATE = """
         status.style.color = "#34d399";
         status.innerText = `⏳ Medya formatı (${mode.toUpperCase()}) hazırlanıyor, lütfen bekleyin...`;
 
-        // Format seçimine göre rota ve başlıkları dinamik olarak belirliyoruz
-        let apiUrl = "";
-        let apiHost = "";
-
+        // --- MP3 MODU: RAPIDAPI KULLANILIYOR ---
         if (mode === 'mp3') {
-            // MP3 için senin tabletten açtığın çalışan ses motoru
-            apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
-            apiHost = "youtube-mp36.p.rapidapi.com";
-        } else {
-            // MP4 (Görüntü + Ses) için yüksek performanslı video motoru
-            apiUrl = `https://youtube-video-and-shorts-downloader1.p.rapidapi.com/api/v1/youtube/video?url=https://www.youtube.com/watch?v=${videoId}`;
-            apiHost = "youtube-video-and-shorts-downloader1.p.rapidapi.com";
-        }
-        
-        fetch(apiUrl, {
-            method: "GET",
-            headers: {
-                "x-rapidapi-key": RAPIDAPI_KEY,
-                "x-rapidapi-host": apiHost
-            }
-        })
-        .then(response => {
-            if (!response.ok) throw new Error("Bağlantı hatası alındı: " + response.status);
-            return response.json();
-        })
-        .then(data => {
-            // MP3 İşleme Kontrolü
-            if (mode === 'mp3') {
+            const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+            
+            fetch(apiUrl, {
+                method: "GET",
+                headers: {
+                    "x-rapidapi-key": RAPIDAPI_KEY,
+                    "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
+                }
+            })
+            .then(response => {
+                if (!response.ok) throw new Error("RapidAPI bağlantı hatası: " + response.status);
+                return response.json();
+            })
+            .then(data => {
                 if (data && data.status === "processing") {
-                    status.innerText = "⏳ Ses dosyası sunucuda işleniyor, 3 saniye içinde otomatik tekrar denenecek...";
+                    status.innerText = "⏳ Ses dosyası dönüştürülüyor, 3 saniye içinde otomatik tekrar denenecek...";
                     setTimeout(processDownload, 3000);
                     return;
                 }
                 if (data && data.status === "ok" && data.link) {
                     triggerDownload(data.link, status, btn);
                 } else {
-                    throw new Error(data.msg || "MP3 bağlantısı oluşturulamadı.");
+                    throw new Error(data.msg || "MP3 indirme bağlantısı alınamadı.");
                 }
-            } 
-            // MP4 İşleme Kontrolü
-            else {
-                // API'den gelen veride video linkini bulmaya çalışıyoruz
-                if (data && data.links && data.links.length > 0) {
-                    // Hem ses hem görüntünün bir arada olduğu en yüksek kaliteli (genelde ilk sıradaki) linki seçiyoruz
-                    const videoLink = data.links[0].link;
-                    if (videoLink) {
-                        triggerDownload(videoLink, status, btn);
-                    } else {
-                        throw new Error("Video indirme linki boş döndü.");
-                    }
+            })
+            .catch(err => showHata(err.message, status, btn));
+        } 
+        
+        // --- MP4 MODU: APISIZ, LIMITSIZ COBALT TÜNELİ KULLANILIYOR ---
+        else {
+            // Sınırlandırması olmayan, hızı optimize edilmiş özel Cobalt video tüneli
+            fetch("https://cobalt.api.unblockit.pro/api/json", {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    url: `https://www.youtube.com/watch?v=${videoId}`,
+                    isAudioOnly: false,
+                    vQuality: "720",
+                    filenamePattern: "basic"
+                })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error("Video tünel sunucusu meşgul, durum kodu: " + response.status);
+                return response.json();
+            })
+            .then(data => {
+                if (data && data.url) {
+                    triggerDownload(data.url, status, btn);
+                } else if (data && data.text) {
+                    throw new Error(data.text);
                 } else {
-                    throw new Error("API video formatına dönüştüremedi veya video bulunamadı.");
+                    throw new Error("Video tünelinden geçerli veri alınamadı.");
                 }
-            }
-        })
-        .catch(err => {
-            status.style.color = "#ef4444";
-            status.innerText = "❌ Hata Oluştu!\\nDetay: " + err.message;
-            btn.disabled = false;
-            console.error(err);
-        });
+            })
+            .catch(err => showHata(err.message, status, btn));
+        }
     }
 
     function triggerDownload(downloadUrl, status, btn) {
         status.style.color = "#34d399";
         status.innerText = "✅ İşlem tamam! İndirme tarayıcınızda başlatıldı.";
         btn.disabled = false;
-        
-        // İndirme linkini tetikliyoruz
         window.location.href = downloadUrl;
+    }
+
+    function showHata(message, status, btn) {
+        status.style.color = "#ef4444";
+        status.innerText = "❌ Hata Oluştu!\\nDetay: " + message;
+        btn.disabled = false;
     }
 </script>
 </body>
 </html>
 """
 
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
