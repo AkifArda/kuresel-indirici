@@ -35,7 +35,7 @@ HTML_TEMPLATE = """
         .radio-btn input[type="radio"]:checked + .radio-label { border-color: var(--accent-color); background-color: rgba(16, 185, 129, 0.08); color: var(--accent-color); }
         button { width: 100%; padding: 16px; background-color: var(--accent-color); border: none; border-radius: 8px; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
         button:disabled { background-color: var(--border-color); color: var(--text-muted); cursor: not-allowed; }
-        .status-box { margin-top: 25px; background-color: #05070c; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; color: #34d399; text-align: center; border: 1px solid rgba(52, 211, 153, 0.2); }
+        .status-box { margin-top: 25px; background-color: #05070c; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; color: #34d399; text-align: center; border: 1px solid rgba(52, 211, 153, 0.2); white-space: pre-wrap; word-break: break-all; }
     </style>
 </head>
 <body>
@@ -45,7 +45,7 @@ HTML_TEMPLATE = """
     
     <div class="input-group">
         <label for="url">Medya Linki (URL)</label>
-        <input type="text" id="url" placeholder="YouTube veya Shorts linki yapıştırın..." autocomplete="off">
+        <input type="text" id="url" placeholder="YouTube, Shorts, TikTok linki yapıştırın..." autocomplete="off">
     </div>
 
     <label>Format</label>
@@ -75,10 +75,10 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Küresel tünel üzerinden medya dönüştürülüyor...";
+        status.innerText = "⏳ Yüksek hızlı küresel tünel üzerinden medya dönüştürülüyor...";
 
-        // Linki doğrudan Cobalt API'sine gönderiyoruz, seçici regex aşamasını tamamen kaldırdık
-        fetch("https://api.cobalt.tools/api/json", {
+        // Çok daha hızlı ve kararlı çalışan alternatif Cobalt API altyapısı
+        fetch("https://cobalt.mxdzn.com/api/json", {
             method: "POST",
             headers: {
                 "Accept": "application/json",
@@ -91,24 +91,29 @@ HTML_TEMPLATE = """
                 filenamePattern: "basic"
             })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => { throw new Error(text || "Sunucu hatası kodu: " + response.status); });
+            }
+            return response.json();
+        })
         .then(data => {
             if (data && data.url) {
                 status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme başladı.";
+                status.innerText = "✅ İşlem tamam! İndirme tarayıcınızda başladı.";
                 btn.disabled = false;
                 
-                // İndirme bağlantısını tarayıcıda tetikliyoruz
+                // İndirme işlemini doğrudan tarayıcıda başlatıyoruz
                 window.location.href = data.url;
             } else if (data && data.text) {
                 throw new Error(data.text);
             } else {
-                throw new Error("Medya dönüştürme tüneli düzgün yanıt vermedi.");
+                throw new Error("Dönüştürme motorundan geçersiz yanıt alındı.");
             }
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen az sonra tekrar deneyin.";
+            status.innerText = "❌ Hata Oluştu!\\nDetay: " + err.message;
             btn.disabled = false;
             console.error(err);
         });
