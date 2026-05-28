@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, redirect
 
 app = Flask(__name__)
 
@@ -166,6 +166,15 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+# Tarayıcı yanlışlıkla eski linke gitmeye çalışırsa doğrudan ana sayfaya yönlendiriyoruz
+@app.route('/process', methods=['GET', 'POST'])
+def process():
+    return redirect('/')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
