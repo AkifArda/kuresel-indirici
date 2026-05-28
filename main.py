@@ -1,12 +1,13 @@
 import os
 import subprocess
 import glob
+import sys
 from flask import Flask, render_template_string, request, jsonify, send_file
 
 app = Flask(__name__)
 
-# Geçici indirme klasörü (Bulutta veya tablette çalışırken dosyaların birikeceği yer)
-TMP_DIR = "/tmp/downloads" if os.name != 'nt' else "downloads"
+# Render sunucusunun izin verdiği en güvenli geçici klasör
+TMP_DIR = os.path.join(os.getcwd(), "downloads_temp")
 os.makedirs(TMP_DIR, exist_ok=True)
 
 HTML_TEMPLATE = """
@@ -80,7 +81,8 @@ HTML_TEMPLATE = """
         if (!url) { alert("Lütfen link girin!"); return; }
 
         btn.disabled = true;
-        status.innerText = "⏳ Medya bulut sunucusunda işleniyor... (Bu işlem 15-30 sn sürebilir)";
+        status.style.color = "#34d399";
+        status.innerText = "⏳ Medya sunucuda işleniyor... (Bu işlem ilk başta 20-30 sn sürebilir)";
 
         fetch('/process', {
             method: 'POST',
@@ -88,23 +90,27 @@ HTML_TEMPLATE = """
             body: JSON.stringify({ url: url, mode: mode })
         })
         .then(response => {
-            if (!response.ok) throw new Error("İndirme hatası");
+            if (!response.ok) {
+                return response.json().then(err => { throw new Error(err.error || "İndirme hatası"); });
+            }
             return response.blob().then(blob => ({ blob }));
         })
         .then(({ blob }) => {
-            status.innerText = "✅ İşlem tamam! İndirme cihazınızda başladı.";
+            status.style.color = "#34d399";
+            status.innerText = "✅ İşlem tamam! İndirme başladı.";
             btn.disabled = false;
             
             const downloadUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = downloadUrl;
-            a.download = mode === 'mp3' ? 'audio.mp3' : 'video.mp4';
+            a.download = mode === 'mp3' ? 'download.mp3' : 'download.mp4';
             document.body.appendChild(a);
             a.click();
             a.remove();
         })
         .catch(err => {
-            status.innerText = "❌ Hata: Medya işlenemedi veya link geçersiz.";
+            status.style.color = "#ef4444";
+            status.innerText = "❌ Hata: " + err.message;
             btn.disabled = false;
         });
     }
@@ -123,28 +129,43 @@ def process():
     url = data.get('url')
     mode = data.get('mode')
     
-    out_template = f"{TMP_DIR}/file_%(id)s.%(ext)s"
+    if not url:
+        return jsonify({"error": "Link bos olamaz"}), 400
+
+    out_template = os.path.join(TMP_DIR, "file_%(id)s.%(ext)s")
     
+    # Sunucuda ffmpeg yolunda sorun çıkma ihtimaline karşı yt-dlp'yi en sade haliyle tetikliyoruz
     if mode == 'mp3':
-        cmd = ["yt-dlp", "-f", "ba", "-x", "--audio-format", "mp3", "--audio-quality", "0", "-o", out_template, url]
+        cmd = ["yt-dlp", "-f", "ba", "-x", "--audio-format", "mp3", "-o", out_template, url]
     else:
-        cmd = ["yt-dlp", "-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", out_template, url]
+        # En uyumlu mp4 formatını seçiyoruz birleşme hatası vermemesi için
+        cmd = ["yt-dlp", "-f", "mp4", "-o", out_template, url]
         
     try:
-        for f in glob.glob(f"{TMP_DIR}/file_*"):
+        # Eski kalıntıları temizle
+        for f in glob.glob(os.path.join(TMP_DIR, "file_*")):
             try: os.remove(f)
             except: pass
             
+        print(f"Komut calistiriliyor: {' '.join(cmd)}", flush=True)
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90)
         
+        print(f"STDOUT: {result.stdout}", flush=True)
+        print(f"STDERR: {result.stderr}", flush=True)
+        
         if result.returncode == 0:
-            downloaded_files = glob.glob(f"{TMP_DIR}/file_*")
+            downloaded_files = glob.glob(os.path.join(TMP_DIR, "file_*"))
             if downloaded_files:
                 return send_file(downloaded_files[0], as_attachment=True)
-                
-        return jsonify({"error": "Download failed"}), 400
+            else:
+                return jsonify({"error": "Dosya sunucuda olusturulamadi."}), 500
+        else:
+            # Hatanın can alıcı kısmını tarayıcıya pasla
+            clean_error = result.stderr.split('\n')[-2] if len(result.stderr.split('\n')) > 1 else result.stderr
+            return jsonify({"error": f"yt-dlp hatasi: {clean_error}"}), 400
+            
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Sistem hatası: {str(e)}"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
