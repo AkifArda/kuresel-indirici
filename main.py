@@ -65,6 +65,7 @@ HTML_TEMPLATE = """
 </div>
 
 <script>
+    // RapidAPI anahtarın
     const RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6";
 
     function extractVideoId(url) {
@@ -91,6 +92,7 @@ HTML_TEMPLATE = """
         status.style.color = "#34d399";
         status.innerText = "⏳ Medya formatı hazırlanıyor, lütfen bekleyin...";
 
+        // --- MP3 MODU: ÇALIŞAN SES API'Sİ ---
         if (mode === 'mp3') {
             const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
             
@@ -102,7 +104,7 @@ HTML_TEMPLATE = """
                 }
             })
             .then(response => {
-                if (!response.ok) throw new Error("RapidAPI bağlantı hatası: " + response.status);
+                if (!response.ok) throw new Error("RapidAPI MP3 hatası: " + response.status);
                 return response.json();
             })
             .then(data => {
@@ -119,31 +121,43 @@ HTML_TEMPLATE = """
             })
             .catch(err => showHata(err.message, status, btn));
         } 
+        
+        // --- MP4 MODU: ENGELLENMEYEN RESMİ VİDEO API'Sİ ---
         else {
-            fetch("https://cobalt.api.unblockit.pro/api/json", {
-                method: "POST",
+            // Doğrudan tarayıcıdan çalışan ve video linkini hazırlayan kararlı RapidAPI video motoru
+            const apiUrl = `https://youtube-video-download-hd.p.rapidapi.com/getVideoInfo?url=https://www.youtube.com/watch?v=${videoId}`;
+            
+            fetch(apiUrl, {
+                method: "GET",
                 headers: {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    url: "https://www.youtube.com/watch?v=" + videoId,
-                    isAudioOnly: false,
-                    vQuality: "720",
-                    filenamePattern: "basic"
-                })
+                    "x-rapidapi-key": RAPIDAPI_KEY,
+                    "x-rapidapi-host": "youtube-video-download-hd.p.rapidapi.com"
+                }
             })
             .then(response => {
-                if (!response.ok) throw new Error("Video tünel sunucusu meşgul, durum kodu: " + response.status);
+                if (!response.ok) throw new Error("RapidAPI MP4 hatası: " + response.status);
                 return response.json();
             })
             .then(data => {
-                if (data && data.url) {
-                    triggerDownload(data.url, status, btn);
-                } else if (data && data.text) {
-                    throw new Error(data.text);
+                // Gelen veriden video + ses bir arada olan (mp4) indirme linklerini süzüyoruz
+                if (data && data.status && data.videos && data.videos.items) {
+                    const formats = data.videos.items;
+                    // Kalın/HD olan veya ses içeren ilk stabil MP4 formatını arıyoruz
+                    let downloadUrl = "";
+                    for (let i = 0; i < formats.length; i++) {
+                        if (formats[i].extension === "mp4" && formats[i].url) {
+                            downloadUrl = formats[i].url;
+                            break;
+                        }
+                    }
+                    
+                    if (downloadUrl) {
+                        triggerDownload(downloadUrl, status, btn);
+                    } else {
+                        throw new Error("Uygun MP4 formatında indirme linki bulunamadı.");
+                    }
                 } else {
-                    throw new Error("Video tünelinden geçerli veri alınamadı.");
+                    throw new Error("API video bilgilerini çözemedi veya video gizli/kısıtlı.");
                 }
             })
             .catch(err => showHata(err.message, status, btn));
@@ -171,7 +185,6 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-# Tarayıcı yanlışlıkla eski linke gitmeye çalışırsa doğrudan ana sayfaya yönlendiriyoruz
 @app.route('/process', methods=['GET', 'POST'])
 def process():
     return redirect('/')
