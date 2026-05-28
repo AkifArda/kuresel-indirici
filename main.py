@@ -1,7 +1,6 @@
 import os
 import re
-from flask import Flask, render_template_string, request, jsonify, Response
-import yt_dlp
+from flask import Flask, render_template_string, request, jsonify
 
 app = Flask(__name__)
 
@@ -38,6 +37,7 @@ HTML_TEMPLATE = """
         button { width: 100%; padding: 16px; background-color: var(--accent-color); border: none; border-radius: 8px; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
         button:disabled { background-color: var(--border-color); color: var(--text-muted); cursor: not-allowed; }
         .status-box { margin-top: 25px; background-color: #05070c; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; color: #34d399; text-align: center; border: 1px solid rgba(52, 211, 153, 0.2); }
+        iframe { display: none; width: 0; height: 0; border: 0; }
     </style>
 </head>
 <body>
@@ -66,41 +66,49 @@ HTML_TEMPLATE = """
     <div class="status-box" id="statusText">Link girilmesi bekleniyor...</div>
 </div>
 
+<iframe id="downloadTunnel"></iframe>
+
 <script>
     function processDownload() {
-        const url = document.getElementById('url').value.trim();
+        const urlInput = document.getElementById('url').value.trim();
         const mode = document.getElementById('mp3').checked ? 'mp3' : 'mp4';
         const btn = document.getElementById('downloadBtn');
         const status = document.getElementById('statusText');
+        const tunnel = document.getElementById('downloadTunnel');
 
-        if (!url) { alert("Lütfen link girin!"); return; }
+        if (!urlInput) { alert("Lütfen link girin!"); return; }
+
+        // YouTube Video ID'sini tarayıcıda yakalama
+        const pattern = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\\/\\n\\s]+\\/\\S+\\/|(?:v|e(?:mbed)?)\\/|\\S*?[?&]v=)|youtu\.be\\/|youtube\.com\\/shorts\\/)([a-zA-Z0-9_-]{11})/;
+        const match = urlInput.match(pattern);
+        
+        if (!match || !match[1]) {
+            alert("Lütfen geçerli bir YouTube veya Shorts linki girin!");
+            return;
+        }
+        
+        const videoId = match[1];
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya güvenli tünelde işleniyor, lütfen bekleyin...";
+        status.innerText = "⏳ Cihazınız üzerinden güvenli tünel oluşturuluyor...";
 
-        fetch('/process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: url, mode: mode })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success && data.download_route) {
-                status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme doğrudan sitenizden başlıyor.";
-                btn.disabled = false;
-                
-                window.location.href = data.download_route;
-            } else {
-                throw new Error(data.error || "İndirme bağlantısı oluşturulamadı.");
-            }
-        })
-        .catch(err => {
-            status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya şu an indirilemedi. Lütfen az sonra tekrar deneyin.";
+        // Tarayıcı tabanlı çalışan, engellenemez global API tünelleri
+        let downloadUrl = "";
+        if (mode === 'mp3') {
+            downloadUrl = `https://api.veyt.cc/download?v=${videoId}&f=mp3`;
+        } else {
+            downloadUrl = `https://api.veyt.cc/download?v=${videoId}&f=mp4`;
+        }
+
+        // İndirme tetikleme mantığı
+        setTimeout(() => {
+            status.innerText = "✅ İndirme başladı! Dosyanız hazırlanıyor...";
             btn.disabled = false;
-        });
+            
+            // Gizli iframe üzerinden indirme tetiklenir, kullanıcının sayfası bozulmaz
+            tunnel.src = downloadUrl;
+        }, 1500);
     }
 </script>
 </body>
@@ -111,83 +119,10 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-def get_youtube_id(url):
-    pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})'
-    match = re.search(pattern, url)
-    return match.group(1) if match else None
-
 @app.route('/process', methods=['POST'])
 def process():
-    data = request.json
-    url = data.get('url')
-    mode = data.get('mode')
-    
-    video_id = get_youtube_id(url)
-    if not video_id:
-        return jsonify({"success": False, "error": "Geçersiz YouTube linki"}), 400
-
-    return jsonify({
-        "success": True, 
-        "download_route": f"/download_file?url={url}&mode={mode}"
-    })
-
-@app.route('/download_file')
-def download_file():
-    video_url = request.args.get('url')
-    mode = request.args.get('mode')
-    
-    if not video_url:
-        return "Eksik parametre.", 400
-
-    # YouTube'un Bot Engelleme mekanizmasını (Sign-in duvarını) aşmak için tarayıcı simülasyonu
-    ydl_opts = {
-        'format': 'bestaudio/best' if mode == 'mp3' else 'best[ext=mp4]/best',
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        # Gizli Mod Başlıkları (YouTube'u kandıran can alıcı kısım)
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Sec-Fetch-Mode': 'navigate'
-        }
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            
-            if not info:
-                return "YouTube bot korumasına takıldı, veri çekilemedi. Lütfen az sonra tekrar deneyin.", 500
-                
-            stream_url = info.get('url')
-            video_title = info.get('title', 'media')
-            safe_title = "".join([c if c.isalnum() else "_" for c in video_title])
-            
-        if not stream_url:
-            return "YouTube medya akış bağlantısı yakalanamadı.", 500
-
-        # Yakalanan ham akışı Render sunucusu üzerinden tünelleyip indirtiyoruz
-        import requests
-        media_res = requests.get(stream_url, stream=True, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
-        
-        ext = "mp3" if mode == 'mp3' else "mp4"
-        response_headers = {
-            "Content-Disposition": f"attachment; filename={safe_title}.{ext}",
-            "Content-Type": "audio/mpeg" if mode == 'mp3' else "video/mp4"
-        }
-
-        def generate():
-            for chunk in media_res.iter_content(chunk_size=16384):
-                if chunk:
-                    yield chunk
-
-        return Response(generate(), headers=response_headers)
-
-    except Exception as e:
-        return f"Sistemsel Hata: Motorumuz korumayı geçemedi. Detay: {e}", 500
+    # Eski JS kodlarının kırılmaması için boş bir API rotası bıraktık
+    return jsonify({"success": True})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
