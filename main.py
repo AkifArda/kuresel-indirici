@@ -41,7 +41,7 @@ HTML_TEMPLATE = """
 <body>
 <div class="container">
     <h1>🌍 Kuresel Medya Indirici</h1>
-    <p class="subtitle">YouTube ve Shorts videolarını anında cihazınıza indirin.</p>
+    <p class="subtitle">YouTube ve Shorts videolarını anında MP3 veya MP4 olarak indirin.</p>
     
     <div class="input-group">
         <label for="url">Medya Linki (URL)</label>
@@ -65,7 +65,6 @@ HTML_TEMPLATE = """
 </div>
 
 <script>
-    // RapidAPI anahtarın doğrudan tarayıcı üzerinden güvenle çalışacak kanka
     const RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6";
 
     function extractVideoId(url) {
@@ -90,41 +89,61 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ RapidAPI üzerinden video bilgileri sorgulanıyor...";
+        status.innerText = `⏳ Medya formatı (${mode.toUpperCase()}) hazırlanıyor, lütfen bekleyin...`;
 
-        // Tablete açtığın meşhur youtube-mp36 API motorunu doğrudan tarayıcıdan tetikliyoruz
-        const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+        // Format seçimine göre rota ve başlıkları dinamik olarak belirliyoruz
+        let apiUrl = "";
+        let apiHost = "";
+
+        if (mode === 'mp3') {
+            // MP3 için senin tabletten açtığın çalışan ses motoru
+            apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+            apiHost = "youtube-mp36.p.rapidapi.com";
+        } else {
+            // MP4 (Görüntü + Ses) için yüksek performanslı video motoru
+            apiUrl = `https://youtube-video-and-shorts-downloader1.p.rapidapi.com/api/v1/youtube/video?url=https://www.youtube.com/watch?v=${videoId}`;
+            apiHost = "youtube-video-and-shorts-downloader1.p.rapidapi.com";
+        }
         
         fetch(apiUrl, {
             method: "GET",
             headers: {
                 "x-rapidapi-key": RAPIDAPI_KEY,
-                "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
+                "x-rapidapi-host": apiHost
             }
         })
         .then(response => {
-            if (!response.ok) throw new Error("RapidAPI bağlantı hatası aldı: " + response.status);
+            if (!response.ok) throw new Error("Bağlantı hatası alındı: " + response.status);
             return response.json();
         })
         .then(data => {
-            // API bazen ilk istekte 'processing' durum kodu dönebilir, onu kontrol ediyoruz
-            if (data && data.status === "processing") {
-                status.innerText = "⏳ Video sunucuda dönüştürülüyor, 3 saniye içinde otomatik tekrar denenecek...";
-                setTimeout(processDownload, 3000);
-                return;
-            }
-
-            if (data && data.status === "ok" && data.link) {
-                status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme başladı.";
-                btn.disabled = false;
-                
-                // Yakalanan doğrudan indirme linkini tarayıcıda açıyoruz
-                window.location.href = data.link;
-            } else if (data && data.msg) {
-                throw new Error(data.msg);
-            } else {
-                throw new Error("API geçerli bir indirme linki döndüremedi.");
+            // MP3 İşleme Kontrolü
+            if (mode === 'mp3') {
+                if (data && data.status === "processing") {
+                    status.innerText = "⏳ Ses dosyası sunucuda işleniyor, 3 saniye içinde otomatik tekrar denenecek...";
+                    setTimeout(processDownload, 3000);
+                    return;
+                }
+                if (data && data.status === "ok" && data.link) {
+                    triggerDownload(data.link, status, btn);
+                } else {
+                    throw new Error(data.msg || "MP3 bağlantısı oluşturulamadı.");
+                }
+            } 
+            // MP4 İşleme Kontrolü
+            else {
+                // API'den gelen veride video linkini bulmaya çalışıyoruz
+                if (data && data.links && data.links.length > 0) {
+                    // Hem ses hem görüntünün bir arada olduğu en yüksek kaliteli (genelde ilk sıradaki) linki seçiyoruz
+                    const videoLink = data.links[0].link;
+                    if (videoLink) {
+                        triggerDownload(videoLink, status, btn);
+                    } else {
+                        throw new Error("Video indirme linki boş döndü.");
+                    }
+                } else {
+                    throw new Error("API video formatına dönüştüremedi veya video bulunamadı.");
+                }
             }
         })
         .catch(err => {
@@ -133,6 +152,15 @@ HTML_TEMPLATE = """
             btn.disabled = false;
             console.error(err);
         });
+    }
+
+    function triggerDownload(downloadUrl, status, btn) {
+        status.style.color = "#34d399";
+        status.innerText = "✅ İşlem tamam! İndirme tarayıcınızda başlatıldı.";
+        btn.disabled = false;
+        
+        // İndirme linkini tetikliyoruz
+        window.location.href = downloadUrl;
     }
 </script>
 </body>
