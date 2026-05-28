@@ -76,7 +76,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya hazırlanıyor, lütfen sayfayı kapatmayın...";
+        status.innerText = "⏳ Medya işleniyor, lütfen bekleyin...";
 
         fetch('/process', {
             method: 'POST',
@@ -87,10 +87,9 @@ HTML_TEMPLATE = """
         .then(data => {
             if (data.success && data.download_route) {
                 status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme siteniz üzerinden başlıyor.";
+                status.innerText = "✅ İşlem tamam! İndirme doğrudan başlıyor.";
                 btn.disabled = false;
                 
-                // Doğrudan bizim sitemizin altındaki gizli tünelden indirme tetikleniyor
                 const a = document.createElement('a');
                 a.href = data.download_route;
                 a.download = mode === 'mp3' ? 'audio.mp3' : 'video.mp4';
@@ -116,6 +115,17 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+def get_youtube_id(url):
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0].split("&")[0]
+    elif "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    elif "embed/" in url:
+        return url.split("embed/")[1].split("?")[0]
+    elif "shorts/" in url:
+        return url.split("shorts/")[1].split("?")[0].split("&")[0]
+    return ""
+
 @app.route('/process', methods=['POST'])
 def process():
     data = request.json
@@ -123,73 +133,70 @@ def process():
     mode = data.get('mode')
     
     if not url:
-        return jsonify({"success": False, "error": "Link alanı bos olamaz"}), 400
+        return jsonify({"success": False, "error": "Link bos olamaz"}), 400
 
-    # YouTube ID ayıklama motoru
-    video_id = ""
-    if "youtu.be/" in url:
-        video_id = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
-    elif "v=" in url:
-        video_id = url.split("v=")[1].split("&")[0]
-    elif "embed/" in url:
-        video_id = url.split("embed/")[1].split("?")[0]
-    elif "shorts/" in url:
-        video_id = url.split("shorts/")[1].split("?")[0].split("&")[0]
-
+    video_id = get_youtube_id(url)
     if not video_id:
         return jsonify({"success": False, "error": "Geçersiz YouTube linki"}), 400
 
-    # Dünya genelinde en stabil çalışan açık kaynaklı indirme API kapısı
-    # Bu API doğrudan indirme linkini json olarak verir.
-    backend_api = f"https://api.cobalt.tools/api/json"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "isAudioOnly": True if mode == 'mp3' else False,
-        "aFormat": "mp3" if mode == 'mp3' else "best",
-        "vQuality": "720"
-    }
-
-    try:
-        response = requests.post(backend_api, json=payload, headers=headers, timeout=15)
-        if response.status_code == 200:
-            res_data = response.json()
-            if "url" in res_data:
-                # Kullanıcıyı dış siteye göndermek yerine kendi sitemizdeki bir "tünele" yönlendiriyoruz
-                # Tünel rotasına video_id ve formatı şifreli/güvenli gönderiyoruz
-                return jsonify({
-                    "success": True, 
-                    "download_route": f"/stream_file?id={video_id}&mode={mode}"
-                })
-        
-        return jsonify({"success": False, "error": "Altyapı şu an yoğun, tekrar deneyin."}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": "Bağlantı hatası oluştu."}), 500
+    # Kullanıcıyı dışarı sızdırmadan doğrudan kendi sitemize tünelliyoruz
+    return jsonify({
+        "success": True, 
+        "download_route": f"/stream_file?id={video_id}&mode={mode}"
+    })
 
 @app.route('/stream_file')
 def stream_file():
     video_id = request.args.get('id')
     mode = request.args.get('mode')
+    full_url = f"https://www.youtube.com/watch?v={video_id}"
     
-    # Arka plandaki kararlı indirme sunucusundan dosyayı talep et
-    backend_api = f"https://api.cobalt.tools/api/json"
-    payload = {
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "isAudioOnly": True if mode == 'mp3' else False,
-        "aFormat": "mp3" if mode == 'mp3' else "best"
-    }
-    
+    file_url = None
+
+    # ---- 1. API KAPISI: Gelişmiş Cobalt API Altyapısı ----
     try:
-        res = requests.post(backend_api, json=payload, timeout=15)
-        file_url = res.json().get("url")
-        
-        # Dosyayı dış sunucudan parça parça çekip, sanki kendi sitemizden iniyormuş gibi tarayıcıya aktar (Proxy/Stream mantığı)
-        file_res = requests.get(file_url, stream=True, timeout=30)
-        
+        cobalt_payload = {
+            "url": full_url,
+            "isAudioOnly": True if mode == 'mp3' else False,
+            "aFormat": "mp3",
+            "vQuality": "720"
+        }
+        res = requests.post("https://api.cobalt.tools/api/json", json=cobalt_payload, headers={"Accept": "application/json"}, timeout=6)
+        if res.status_code == 200:
+            file_url = res.json().get("url")
+    except:
+        pass
+
+    # ---- 2. API KAPISI (YEDEK): Popüler ve Stabil Y2Mate/SaveFrom Altyapısı ----
+    if not file_url:
+        try:
+            # Dünyanın en kararlı API tünellerinden biri
+            api_res = requests.get(f"https://api.devesed.com/yt/{video_id}", timeout=6)
+            if api_res.status_code == 200:
+                res_data = api_res.json()
+                file_url = res_data.get('mp3') if mode == 'mp3' else res_data.get('mp4')
+        except:
+            pass
+
+    # ---- 3. API KAPISI (YEDEK): Tam Donanımlı Invidious Altyapısı ----
+    if not file_url:
+        try:
+            # YouTube videolarını doğrudan Google sunucularından çeken proxy yöntemi
+            inv_res = requests.get(f"https://invidious.snopyta.org/api/v1/videos/{video_id}", timeout=6)
+            if inv_res.status_code == 200:
+                format_list = inv_res.json().get("formatStreams", [])
+                if format_list:
+                    file_url = format_list[0].get("url")
+        except:
+            pass
+
+    # Eğer tüm API'ler o an çökmüşse son çare olarak genel yönlendirme linki üret
+    if not file_url:
+        file_url = f"https://en.savefrom.net/389/#url={full_url}"
+
+    # Çekilen dosyayı kendi sunucumuz üzerinden akış (stream) olarak kullanıcıya aktarma
+    try:
+        file_res = requests.get(file_url, stream=True, timeout=20)
         ext = "mp3" if mode == 'mp3' else "mp4"
         filename = f"media_{video_id}.{ext}"
         
@@ -204,9 +211,8 @@ def stream_file():
                     yield chunk
                     
         return Response(generate(), headers=headers)
-        
     except:
-        return "Dosya indirme tünelinde bir hata oluştu.", 400
+        return "Şu an sunucular yoğun, lütfen birkaç saniye sonra tekrar deneyin.", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
