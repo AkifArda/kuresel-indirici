@@ -81,7 +81,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Bulut sunucusu YouTube engelini aşıyor... (30 sn sürebilir)";
+        status.innerText = "⏳ Medya bulut sunucusunda işleniyor... (Bu işlem 15-30 sn sürebilir)";
 
         fetch('/process', {
             method: 'POST',
@@ -96,20 +96,20 @@ HTML_TEMPLATE = """
         })
         .then(({ blob }) => {
             status.style.color = "#34d399";
-            status.innerText = "✅ İşlem tamam! İndirme başladı.";
+            status.innerText = "✅ İşlem tamam! İndirme cihazınızda başladı.";
             btn.disabled = false;
             
             const downloadUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = downloadUrl;
-            a.download = mode === 'mp3' ? 'download.mp3' : 'download.mp4';
+            a.download = mode === 'mp3' ? 'audio.mp3' : 'video.mp4';
             document.body.appendChild(a);
             a.click();
             a.remove();
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: " + err.message;
+            status.innerText = "❌ Hata: Medya işlenemedi veya link geçersiz.";
             btn.disabled = false;
         });
     }
@@ -129,26 +129,34 @@ def process():
     mode = data.get('mode')
     
     if not url:
-        return jsonify({"error": "Link bos olamaz"}), 400
+        return jsonify({"error": "Link alan boş bırakılamaz"}), 400
 
     out_template = os.path.join(TMP_DIR, "file_%(id)s.%(ext)s")
     
-    # YouTube bot duvarını aşmak için iOS/Safari taklidi ve gelişmiş extractor parametreleri ekliyoruz
+    # Sunucu engellerini bypass etmek için çok daha agresif ve güncel kafa parametreleri ekliyoruz
     base_args = [
         "yt-dlp",
-        "--extractor-args", "youtube:player-client=ios,web_safari",
-        "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-        "--add-header", "Accept-Language:tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "--force-overwrites",
         "--no-check-certificates",
+        "--geo-bypass",
+        "--sleep-requests", "1",
         "-o", out_template,
         url
     ]
     
-    # Komut dizilimini Flask'ın hata vermeyeceği şekilde birleştiriyoruz
+    # YouTube veya TikTok linki girildiğinde veri merkezi korumasını aşmak için tarayıcı taklidini en üst düzeye çekiyoruz
+    if "youtube.com" in url or "youtu.be" in url or "tiktok.com" in url:
+        base_args += [
+            "--extractor-args", "youtube:player-client=ios,web_safari;tiktok:impersonate=iphone",
+            "--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+            "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "--add-header", "Accept-Language:tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+        ]
+    
     if mode == 'mp3':
-        cmd = [base_args[0]] + base_args[1:5] + ["-f", "ba", "-x", "--audio-format", "mp3"] + base_args[5:]
+        cmd = [base_args[0]] + base_args[1:-1] + ["-f", "ba", "-x", "--audio-format", "mp3"] + [base_args[-1]]
     else:
-        cmd = [base_args[0]] + base_args[1:5] + ["-f", "mp4"] + base_args[5:]
+        cmd = [base_args[0]] + base_args[1:-1] + ["-f", "mp4/best"] + [base_args[-1]]
         
     try:
         for f in glob.glob(os.path.join(TMP_DIR, "file_*")):
@@ -165,18 +173,13 @@ def process():
             downloaded_files = glob.glob(os.path.join(TMP_DIR, "file_*"))
             if downloaded_files:
                 return send_file(downloaded_files[0], as_attachment=True)
-            else:
-                return jsonify({"error": "Dosya sunucuda olusturulamadi."}), 500
-        else:
-            lines = [line.strip() for line in result.stderr.split('\n') if line.strip()]
-            clean_error = lines[-1] if lines else "Bilinmeyen hata"
-            if "sign in to confirm" in result.stderr.lower() or "bot" in result.stderr.lower():
-                clean_error = "YouTube bot duvarı hala aktif. Başka platform linki (Suno/SoundCloud vb.) deneyebilir veya kodu lokal pydroid'de çalıştırabilirsin."
-            return jsonify({"error": f"yt-dlp hatasi: {clean_error}"}), 400
+                
+        return jsonify({"error": "Medya işlenemedi veya link geçersiz."}), 400
             
     except Exception as e:
-        return jsonify({"error": f"Sistem hatası: {str(e)}"}), 500
+        return jsonify({"error": "Sunucu hatası oluştu."}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+    
