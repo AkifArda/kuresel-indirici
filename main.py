@@ -77,7 +77,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya sunucuda yerel olarak işleniyor ve indiriliyor. Lütfen bekleyin...";
+        status.innerText = "⏳ Medya güvenli tünelde işleniyor, lütfen bekleyin...";
 
         fetch('/process', {
             method: 'POST',
@@ -98,7 +98,7 @@ HTML_TEMPLATE = """
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya şu an indirilemedi. Linkin doğruluğundan emin olup tekrar deneyin.";
+            status.innerText = "❌ Hata: Medya şu an indirilemedi. Lütfen az sonra tekrar deneyin.";
             btn.disabled = false;
         });
     }
@@ -139,30 +139,39 @@ def download_file():
     if not video_url:
         return "Eksik parametre.", 400
 
-    # Tamamen bağımsız yt-dlp ayarları (Harici API kullanmadan doğrudan video akış linkini yakalar)
+    # YouTube'un Bot Engelleme mekanizmasını (Sign-in duvarını) aşmak için tarayıcı simülasyonu
     ydl_opts = {
         'format': 'bestaudio/best' if mode == 'mp3' else 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'ignoreerrors': True
+        'ignoreerrors': False,
+        # Gizli Mod Başlıkları (YouTube'u kandıran can alıcı kısım)
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate'
+        }
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
-            # YouTube'un doğrudan medya akış linkini (googlevideo.com linkini) yakalıyoruz
+            
+            if not info:
+                return "YouTube bot korumasına takıldı, veri çekilemedi. Lütfen az sonra tekrar deneyin.", 500
+                
             stream_url = info.get('url')
             video_title = info.get('title', 'media')
-            # Türkçe karakterleri temizleme ve güvenli dosya adı oluşturma
             safe_title = "".join([c if c.isalnum() else "_" for c in video_title])
             
         if not stream_url:
-            return "YouTube medya akışı yakalanamadı.", 500
+            return "YouTube medya akış bağlantısı yakalanamadı.", 500
 
-        # Yakalanan gerçek YouTube akışını Render üzerinden tünelleyerek kullanıcıya aktarıyoruz
+        # Yakalanan ham akışı Render sunucusu üzerinden tünelleyip indirtiyoruz
         import requests
-        media_res = requests.get(stream_url, stream=True, timeout=60)
+        media_res = requests.get(stream_url, stream=True, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
         
         ext = "mp3" if mode == 'mp3' else "mp4"
         response_headers = {
@@ -178,7 +187,7 @@ def download_file():
         return Response(generate(), headers=response_headers)
 
     except Exception as e:
-        return f"Sistemsel Hata: Kendi motorumuz medyayı çekemedi. Detay: {e}", 500
+        return f"Sistemsel Hata: Motorumuz korumayı geçemedi. Detay: {e}", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
