@@ -1,5 +1,4 @@
 import os
-import re
 from flask import Flask, render_template_string, request, jsonify
 
 app = Flask(__name__)
@@ -37,7 +36,6 @@ HTML_TEMPLATE = """
         button { width: 100%; padding: 16px; background-color: var(--accent-color); border: none; border-radius: 8px; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
         button:disabled { background-color: var(--border-color); color: var(--text-muted); cursor: not-allowed; }
         .status-box { margin-top: 25px; background-color: #05070c; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; color: #34d399; text-align: center; border: 1px solid rgba(52, 211, 153, 0.2); }
-        iframe { display: none; width: 0; height: 0; border: 0; }
     </style>
 </head>
 <body>
@@ -47,7 +45,7 @@ HTML_TEMPLATE = """
     
     <div class="input-group">
         <label for="url">Medya Linki (URL)</label>
-        <input type="text" id="url" placeholder="YouTube linki yapıştırın..." autocomplete="off">
+        <input type="text" id="url" placeholder="YouTube veya Shorts linki yapıştırın..." autocomplete="off">
     </div>
 
     <label>Format</label>
@@ -66,49 +64,54 @@ HTML_TEMPLATE = """
     <div class="status-box" id="statusText">Link girilmesi bekleniyor...</div>
 </div>
 
-<iframe id="downloadTunnel"></iframe>
-
 <script>
     function processDownload() {
         const urlInput = document.getElementById('url').value.trim();
         const mode = document.getElementById('mp3').checked ? 'mp3' : 'mp4';
         const btn = document.getElementById('downloadBtn');
         const status = document.getElementById('statusText');
-        const tunnel = document.getElementById('downloadTunnel');
 
-        if (!urlInput) { alert("Lütfen link girin!"); return; }
-
-        // YouTube Video ID'sini tarayıcıda yakalama
-        const pattern = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\\/\\n\\s]+\\/\\S+\\/|(?:v|e(?:mbed)?)\\/|\\S*?[?&]v=)|youtu\.be\\/|youtube\.com\\/shorts\\/)([a-zA-Z0-9_-]{11})/;
-        const match = urlInput.match(pattern);
-        
-        if (!match || !match[1]) {
-            alert("Lütfen geçerli bir YouTube veya Shorts linki girin!");
-            return;
-        }
-        
-        const videoId = match[1];
+        if (!urlInput) { alert("Lütfen geçerli bir link girin!"); return; }
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Cihazınız üzerinden güvenli tünel oluşturuluyor...";
+        status.innerText = "⏳ Küresel tünel üzerinden medya dönüştürülüyor...";
 
-        // Tarayıcı tabanlı çalışan, engellenemez global API tünelleri
-        let downloadUrl = "";
-        if (mode === 'mp3') {
-            downloadUrl = `https://api.veyt.cc/download?v=${videoId}&f=mp3`;
-        } else {
-            downloadUrl = `https://api.veyt.cc/download?v=${videoId}&f=mp4`;
-        }
-
-        // İndirme tetikleme mantığı
-        setTimeout(() => {
-            status.innerText = "✅ İndirme başladı! Dosyanız hazırlanıyor...";
+        // Linki doğrudan Cobalt API'sine gönderiyoruz, seçici regex aşamasını tamamen kaldırdık
+        fetch("https://api.cobalt.tools/api/json", {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                url: urlInput,
+                isAudioOnly: mode === 'mp3',
+                vQuality: "720",
+                filenamePattern: "basic"
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.url) {
+                status.style.color = "#34d399";
+                status.innerText = "✅ İşlem tamam! İndirme başladı.";
+                btn.disabled = false;
+                
+                // İndirme bağlantısını tarayıcıda tetikliyoruz
+                window.location.href = data.url;
+            } else if (data && data.text) {
+                throw new Error(data.text);
+            } else {
+                throw new Error("Medya dönüştürme tüneli düzgün yanıt vermedi.");
+            }
+        })
+        .catch(err => {
+            status.style.color = "#ef4444";
+            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen az sonra tekrar deneyin.";
             btn.disabled = false;
-            
-            // Gizli iframe üzerinden indirme tetiklenir, kullanıcının sayfası bozulmaz
-            tunnel.src = downloadUrl;
-        }, 1500);
+            console.error(err);
+        });
     }
 </script>
 </body>
@@ -121,7 +124,6 @@ def index():
 
 @app.route('/process', methods=['POST'])
 def process():
-    # Eski JS kodlarının kırılmaması için boş bir API rotası bıraktık
     return jsonify({"success": True})
 
 if __name__ == '__main__':
