@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
@@ -89,9 +89,8 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = `⏳ Medya formatı (${mode.toUpperCase()}) hazırlanıyor, lütfen bekleyin...`;
+        status.innerText = "⏳ Medya formatı hazırlanıyor, lütfen bekleyin...";
 
-        // --- MP3 MODU: RAPIDAPI KULLANILIYOR ---
         if (mode === 'mp3') {
             const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
             
@@ -120,10 +119,7 @@ HTML_TEMPLATE = """
             })
             .catch(err => showHata(err.message, status, btn));
         } 
-        
-        // --- MP4 MODU: APISIZ, LIMITSIZ COBALT TÜNELİ KULLANILIYOR ---
         else {
-            // Sınırlandırması olmayan, hızı optimize edilmiş özel Cobalt video tüneli
             fetch("https://cobalt.api.unblockit.pro/api/json", {
                 method: "POST",
                 headers: {
@@ -131,7 +127,7 @@ HTML_TEMPLATE = """
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    url: `https://www.youtube.com/watch?v=${videoId}`,
+                    url: "https://www.youtube.com/watch?v=" + videoId,
                     isAudioOnly: false,
                     vQuality: "720",
                     filenamePattern: "basic"
@@ -163,7 +159,7 @@ HTML_TEMPLATE = """
 
     function showHata(message, status, btn) {
         status.style.color = "#ef4444";
-        status.innerText = "❌ Hata Oluştu!\\nDetay: " + message;
+        status.innerText = "Hata Detayı: " + message;
         btn.disabled = false;
     }
 </script>
@@ -171,3 +167,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
