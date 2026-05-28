@@ -6,7 +6,6 @@ from flask import Flask, render_template_string, request, jsonify, send_file
 
 app = Flask(__name__)
 
-# Render sunucusunun izin verdiği en güvenli geçici klasör
 TMP_DIR = os.path.join(os.getcwd(), "downloads_temp")
 os.makedirs(TMP_DIR, exist_ok=True)
 
@@ -134,15 +133,20 @@ def process():
 
     out_template = os.path.join(TMP_DIR, "file_%(id)s.%(ext)s")
     
-    # Sunucuda ffmpeg yolunda sorun çıkma ihtimaline karşı yt-dlp'yi en sade haliyle tetikliyoruz
+    # YouTube bot engelini (Sign in to confirm you're not a bot) aşmak için android istemci parametreleri ekliyoruz
+    base_args = [
+        "yt-dlp",
+        "--extractor-args", "youtube:player-client=android,web",
+        "-o", out_template,
+        url
+    ]
+    
     if mode == 'mp3':
-        cmd = ["yt-dlp", "-f", "ba", "-x", "--audio-format", "mp3", "-o", out_template, url]
+        cmd = base_args[:3] + ["-f", "ba", "-x", "--audio-format", "mp3"] + base_args[3:]
     else:
-        # En uyumlu mp4 formatını seçiyoruz birleşme hatası vermemesi için
-        cmd = ["yt-dlp", "-f", "mp4", "-o", out_template, url]
+        cmd = base_args[:3] + ["-f", "mp4"] + base_args[3:]
         
     try:
-        # Eski kalıntıları temizle
         for f in glob.glob(os.path.join(TMP_DIR, "file_*")):
             try: os.remove(f)
             except: pass
@@ -160,8 +164,10 @@ def process():
             else:
                 return jsonify({"error": "Dosya sunucuda olusturulamadi."}), 500
         else:
-            # Hatanın can alıcı kısmını tarayıcıya pasla
-            clean_error = result.stderr.split('\n')[-2] if len(result.stderr.split('\n')) > 1 else result.stderr
+            lines = [line.strip() for line in result.stderr.split('\n') if line.strip()]
+            clean_error = lines[-1] if lines else "Bilinmeyen hata"
+            if "bot" in clean_error.lower():
+                clean_error = "YouTube bot engeline takildi. Farkli bir cihaz istemcisi denenmeli."
             return jsonify({"error": f"yt-dlp hatasi: {clean_error}"}), 400
             
     except Exception as e:
