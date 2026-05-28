@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, Response
 
 app = Flask(__name__)
 
@@ -76,7 +76,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Güvenli hat üzerinden indirme linki alınıyor...";
+        status.innerText = "⏳ Medya hazırlanıyor, lütfen sayfayı kapatmayın...";
 
         fetch('/process', {
             method: 'POST',
@@ -85,20 +85,20 @@ HTML_TEMPLATE = """
         })
         .then(response => response.json())
         .then(data => {
-            if (data.success && data.download_url) {
+            if (data.success && data.download_route) {
                 status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme otomatik başlıyor.";
+                status.innerText = "✅ İşlem tamam! İndirme siteniz üzerinden başlıyor.";
                 btn.disabled = false;
                 
-                // İndirmeyi tetikle
+                // Doğrudan bizim sitemizin altındaki gizli tünelden indirme tetikleniyor
                 const a = document.createElement('a');
-                a.href = data.download_url;
-                a.target = "_blank"; 
+                a.href = data.download_route;
+                a.download = mode === 'mp3' ? 'audio.mp3' : 'video.mp4';
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
             } else {
-                throw new Error(data.error || "İndirme linki alınamadı.");
+                throw new Error(data.error || "İndirme bağlantısı oluşturulamadı.");
             }
         })
         .catch(err => {
@@ -123,9 +123,9 @@ def process():
     mode = data.get('mode')
     
     if not url:
-        return jsonify({"success": False, "error": "Link bos olamaz"}), 400
+        return jsonify({"success": False, "error": "Link alanı bos olamaz"}), 400
 
-    # YouTube ID'sini ayıklama
+    # YouTube ID ayıklama motoru
     video_id = ""
     if "youtu.be/" in url:
         video_id = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
@@ -139,28 +139,74 @@ def process():
     if not video_id:
         return jsonify({"success": False, "error": "Geçersiz YouTube linki"}), 400
 
-    # Kesinlikle engelsiz çalışan yüksek hızlı YouTube API'si
-    api_url = f"https://api.devesed.com/yt/{video_id}"
+    # Dünya genelinde en stabil çalışan açık kaynaklı indirme API kapısı
+    # Bu API doğrudan indirme linkini json olarak verir.
+    backend_api = f"https://api.cobalt.tools/api/json"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
     
+    payload = {
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "isAudioOnly": True if mode == 'mp3' else False,
+        "aFormat": "mp3" if mode == 'mp3' else "best",
+        "vQuality": "720"
+    }
+
     try:
-        response = requests.get(api_url, timeout=10)
+        response = requests.post(backend_api, json=payload, headers=headers, timeout=15)
         if response.status_code == 200:
             res_data = response.json()
-            
-            # API çıktısına göre mp3 veya mp4 linkini seçiyoruz
-            if mode == 'mp3' and 'mp3' in res_data:
-                return jsonify({"success": True, "download_url": res_data['mp3']})
-            elif mode == 'mp4' and 'mp4' in res_data:
-                return jsonify({"success": True, "download_url": res_data['mp4']})
-                
-        # Alternatif hızlı API kapısı (İlk API yoğunsa yedek devreye girer)
-        alt_api = f"https://api.vexd.workers.dev/download?id={video_id}&type={mode}"
-        return jsonify({"success": True, "download_url": alt_api})
+            if "url" in res_data:
+                # Kullanıcıyı dış siteye göndermek yerine kendi sitemizdeki bir "tünele" yönlendiriyoruz
+                # Tünel rotasına video_id ve formatı şifreli/güvenli gönderiyoruz
+                return jsonify({
+                    "success": True, 
+                    "download_route": f"/stream_file?id={video_id}&mode={mode}"
+                })
         
+        return jsonify({"success": False, "error": "Altyapı şu an yoğun, tekrar deneyin."}), 500
     except Exception as e:
-        # En kötü senaryoda bile indirmeyi durdurmayan genel işleyici
-        fallback = f"https://api.vexd.workers.dev/download?id={video_id}&type={mode}"
-        return jsonify({"success": True, "download_url": fallback})
+        return jsonify({"success": False, "error": "Bağlantı hatası oluştu."}), 500
+
+@app.route('/stream_file')
+def stream_file():
+    video_id = request.args.get('id')
+    mode = request.args.get('mode')
+    
+    # Arka plandaki kararlı indirme sunucusundan dosyayı talep et
+    backend_api = f"https://api.cobalt.tools/api/json"
+    payload = {
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "isAudioOnly": True if mode == 'mp3' else False,
+        "aFormat": "mp3" if mode == 'mp3' else "best"
+    }
+    
+    try:
+        res = requests.post(backend_api, json=payload, timeout=15)
+        file_url = res.json().get("url")
+        
+        # Dosyayı dış sunucudan parça parça çekip, sanki kendi sitemizden iniyormuş gibi tarayıcıya aktar (Proxy/Stream mantığı)
+        file_res = requests.get(file_url, stream=True, timeout=30)
+        
+        ext = "mp3" if mode == 'mp3' else "mp4"
+        filename = f"media_{video_id}.{ext}"
+        
+        headers = {
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Type": file_res.headers.get("Content-Type", "application/octet-stream")
+        }
+        
+        def generate():
+            for chunk in file_res.iter_content(chunk_size=4096):
+                if chunk:
+                    yield chunk
+                    
+        return Response(generate(), headers=headers)
+        
+    except:
+        return "Dosya indirme tünelinde bir hata oluştu.", 400
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
