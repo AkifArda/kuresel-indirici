@@ -5,7 +5,7 @@ from flask import Flask, render_template_string, request, jsonify, Response
 
 app = Flask(__name__)
 
-# RapidAPI'den aldığın güncel anahtarını buraya sabitledim kanka:
+# RapidAPI'den aldığın güncel anahtarın kanka:
 RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6"
 
 HTML_TEMPLATE = """
@@ -80,7 +80,7 @@ HTML_TEMPLATE = """
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Medya işleniyor, lütfen sayfayı kapatmayın...";
+        status.innerText = "⏳ Medya sunucuda yüksek hızda işleniyor, lütfen bekleyin...";
 
         fetch('/process', {
             method: 'POST',
@@ -105,7 +105,7 @@ HTML_TEMPLATE = """
         })
         .catch(err => {
             status.style.color = "#ef4444";
-            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen az sonra tekrar deneyin.";
+            status.innerText = "❌ Hata: Medya şu an işlenemedi. Lütfen linki kontrol edip az sonra tekrar deneyin.";
             btn.disabled = false;
         });
     }
@@ -144,47 +144,50 @@ def stream_file():
     mode = request.args.get('mode')
     
     file_url = None
+    full_url = f"https://www.youtube.com/watch?v={video_id}"
 
-    if mode == 'mp3':
-        # ---- MP3 İÇİN SENİN RAPIDAPI MOTORUN (YOUTUBE MP3) ----
-        url = "https://youtube-mp36.p.rapidapi.com/dl"
-        headers = {
-            "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
-        }
+    # ---- YENİ ULTRA KARARLI RAPIDAPI MOTORU ----
+    # Hem MP3 hem de MP4 indirme linkini tek seferde doğrudan teslim eden ana yapı
+    url = "https://youtube-media-downloader.p.rapidapi.com/v2/video/details"
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "youtube-media-downloader.p.rapidapi.com"
+    }
+    
+    try:
+        res = requests.get(url, headers=headers, params={"videosId": video_id}, timeout=12)
+        if res.status_code == 200:
+            res_json = res.json()
+            if mode == 'mp3':
+                # API'den gelen en yüksek kalitedeki ses (audio) akışını alıyoruz
+                audios = res_json.get("audios", {}).get("items", [])
+                if audios:
+                    file_url = audios[0].get("url")
+            else:
+                # API'den gelen doğrudan video akışını alıyoruz (720p veya en iyi uyumlu)
+                videos = res_json.get("videos", {}).get("items", [])
+                if videos:
+                    file_url = videos[0].get("url")
+    except Exception as e:
+        print(f"RapidAPI Hatasi: {e}", flush=True)
+
+    # ---- 2. YEDEK KAPISI (COBALT) ----
+    if not file_url:
         try:
-            res = requests.get(url, headers=headers, params={"id": video_id}, timeout=12)
-            if res.status_code == 200:
-                file_url = res.json().get("link")
-        except Exception as e:
-            print(f"MP3 API Hatasi: {e}", flush=True)
-    else:
-        # ---- MP4 (VIDEO) İÇİN ÇOKLU ALTYAPI GEÇİŞ SİSTEMİ ----
-        # 1. Havuz: Cobalt Engine Tüneli
-        try:
-            video_res = requests.post("https://api.cobalt.tools/api/json", json={
-                "url": f"https://www.youtube.com/watch?v={video_id}",
-                "isAudioOnly": False,
+            cobalt_res = requests.post("https://api.cobalt.tools/api/json", json={
+                "url": full_url,
+                "isAudioOnly": True if mode == 'mp3' else False,
                 "vQuality": "720"
-            }, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"}, timeout=10)
-            if video_res.status_code == 200:
-                file_url = video_res.json().get("url")
+            }, headers={"Accept": "application/json"}, timeout=8)
+            if cobalt_res.status_code == 200:
+                file_url = cobalt_res.json().get("url")
         except:
             pass
 
-        # 2. Havuz (Yedek): Devesed Video Tüneli
-        if not file_url:
-            try:
-                alt_res = requests.get(f"https://api.devesed.com/yt/{video_id}", timeout=10)
-                if alt_res.status_code == 200:
-                    file_url = alt_res.json().get('mp4')
-            except:
-                pass
-
     if not file_url or not file_url.startswith("http"):
-        return "Medya sunucusu şu an yanıt vermiyor veya API limiti tükendi. Lütfen birazdan tekrar deneyin.", 503
+        return "Medya sunucusu şu an yanıt vermiyor veya istek limiti aşıldı. Lütfen birazdan tekrar deneyiniz.", 503
 
-    # Gerçek medyayı (mp3/mp4) Render sunucusu üzerinden gizli akış (stream) olarak aktarıyoruz
+    # Medya dosyasını Render üzerinden gizli akış (stream) olarak kullanıcının tarayıcısına basıyoruz
     try:
         file_res = requests.get(file_url, stream=True, timeout=45)
         ext = "mp3" if mode == 'mp3' else "mp4"
@@ -202,7 +205,7 @@ def stream_file():
                     
         return Response(generate(), headers=response_headers)
     except:
-        return "Medya aktarılırken bir senkronizasyon hatası oluştu.", 500
+        return "Medya tünelden akıtılırken senkronizasyon hatası oluştu.", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
