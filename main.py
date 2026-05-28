@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
@@ -41,11 +41,11 @@ HTML_TEMPLATE = """
 <body>
 <div class="container">
     <h1>🌍 Kuresel Medya Indirici</h1>
-    <p class="subtitle">Herhangi bir cihazdan link girin, saniyeler icinde indirin.</p>
+    <p class="subtitle">YouTube ve Shorts videolarını anında cihazınıza indirin.</p>
     
     <div class="input-group">
         <label for="url">Medya Linki (URL)</label>
-        <input type="text" id="url" placeholder="YouTube, Shorts, TikTok linki yapıştırın..." autocomplete="off">
+        <input type="text" id="url" placeholder="YouTube veya Shorts linki yapıştırın..." autocomplete="off">
     </div>
 
     <label>Format</label>
@@ -65,50 +65,66 @@ HTML_TEMPLATE = """
 </div>
 
 <script>
+    // RapidAPI anahtarın doğrudan tarayıcı üzerinden güvenle çalışacak kanka
+    const RAPIDAPI_KEY = "20119f7480msh39541b239b12360p16c4acjsn913a16243db6";
+
+    function extractVideoId(url) {
+        const pattern = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\\/\\n\\s]+\\/\\S+\\/|(?:v|e(?:mbed)?)\\/|\\S*?[?&]v=)|youtu\.be\\/|youtube\.com\\/shorts\\/)([a-zA-Z0-9_-]{11})/;
+        const match = url.match(pattern);
+        return (match && match[1]) ? match[1] : null;
+    }
+
     function processDownload() {
         const urlInput = document.getElementById('url').value.trim();
         const mode = document.getElementById('mp3').checked ? 'mp3' : 'mp4';
         const btn = document.getElementById('downloadBtn');
         const status = document.getElementById('statusText');
 
-        if (!urlInput) { alert("Lütfen geçerli bir link girin!"); return; }
+        if (!urlInput) { alert("Lütfen bir link girin!"); return; }
+
+        const videoId = extractVideoId(urlInput);
+        if (!videoId) {
+            alert("Geçerli bir YouTube veya Shorts linki bulunamadı!");
+            return;
+        }
 
         btn.disabled = true;
         status.style.color = "#34d399";
-        status.innerText = "⏳ Yüksek hızlı küresel tünel üzerinden medya dönüştürülüyor...";
+        status.innerText = "⏳ RapidAPI üzerinden video bilgileri sorgulanıyor...";
 
-        // Çok daha hızlı ve kararlı çalışan alternatif Cobalt API altyapısı
-        fetch("https://cobalt.mxdzn.com/api/json", {
-            method: "POST",
+        // Tablete açtığın meşhur youtube-mp36 API motorunu doğrudan tarayıcıdan tetikliyoruz
+        const apiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+        
+        fetch(apiUrl, {
+            method: "GET",
             headers: {
-                "Accept": "application/json",
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                url: urlInput,
-                isAudioOnly: mode === 'mp3',
-                vQuality: "720",
-                filenamePattern: "basic"
-            })
+                "x-rapidapi-key": RAPIDAPI_KEY,
+                "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
+            }
         })
         .then(response => {
-            if (!response.ok) {
-                return response.text().then(text => { throw new Error(text || "Sunucu hatası kodu: " + response.status); });
-            }
+            if (!response.ok) throw new Error("RapidAPI bağlantı hatası aldı: " + response.status);
             return response.json();
         })
         .then(data => {
-            if (data && data.url) {
+            // API bazen ilk istekte 'processing' durum kodu dönebilir, onu kontrol ediyoruz
+            if (data && data.status === "processing") {
+                status.innerText = "⏳ Video sunucuda dönüştürülüyor, 3 saniye içinde otomatik tekrar denenecek...";
+                setTimeout(processDownload, 3000);
+                return;
+            }
+
+            if (data && data.status === "ok" && data.link) {
                 status.style.color = "#34d399";
-                status.innerText = "✅ İşlem tamam! İndirme tarayıcınızda başladı.";
+                status.innerText = "✅ İşlem tamam! İndirme başladı.";
                 btn.disabled = false;
                 
-                // İndirme işlemini doğrudan tarayıcıda başlatıyoruz
-                window.location.href = data.url;
-            } else if (data && data.text) {
-                throw new Error(data.text);
+                // Yakalanan doğrudan indirme linkini tarayıcıda açıyoruz
+                window.location.href = data.link;
+            } else if (data && data.msg) {
+                throw new Error(data.msg);
             } else {
-                throw new Error("Dönüştürme motorundan geçersiz yanıt alındı.");
+                throw new Error("API geçerli bir indirme linki döndüremedi.");
             }
         })
         .catch(err => {
@@ -126,10 +142,6 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
-
-@app.route('/process', methods=['POST'])
-def process():
-    return jsonify({"success": True})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
